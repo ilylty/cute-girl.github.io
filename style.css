@@ -1,1 +1,19 @@
-/* Add styles here */
+body {
+  margin: 0;
+  overflow: hidden; /* Hide default scrollbar */
+  background-color: #000;
+}
+
+.video-container {
+  width: 100%;
+  height: 100vh; /* Full viewport height */
+  overflow-y: scroll; /* Enable vertical scrolling */
+  scroll-snap-type: y mandatory; /* Enable vertical snapping */
+}
+
+.video-player {
+  width: 100%;
+  height: 100vh; /* Each video takes full viewport height */
+  object-fit: cover; /* Cover the container without distorting aspect ratio */
+  scroll-snap-align: start; /* Snap to the top of each video */
+}
