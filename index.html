@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>H5 视频播放器</title>
+  <title>H5 滴滴</title>
   <link rel="stylesheet" href="https://unpkg.com/swiper/swiper-bundle.min.css">
   <style>
     /* CSS样式与之前版本相同，保持不变 */
@@ -79,8 +79,44 @@
             src = src.replace('https://ilylty.fddfffff.site/', '');
           }
           if (!src) throw new Error('Video source not found in response');
-          return { src, index };
+          return [{ src, index }];
         });
+    }
+
+    // =======================
+    // === 【miyouse】 ======
+    // ===  变量 ===
+    // =======================
+    var miyouse_gid =1;
+    var miyouse_post_id = 65757865;
+    var miyouse_size = 50;
+    function fetchVideo_miyouse(index) {
+      var requestOptions = {
+        method: 'GET',
+        redirect: 'follow'
+      };
+
+      return fetchWithTimeout("https://ilylty.fddfffff.site/https%3A%2F%2Fbinary-proxy.maskperson114514.workers.dev%2F%3F_proxy_referer%3Dhttps%253A%252F%252Fwww%252Emiyoushe%252Ecom%252F%26url%3Dhttps%253A%252F%252Fbbs%252Dapi%252Emiyoushe%252Ecom%252Fpainter%252Fwapi%252FvideoRec%253Fgids%253D"+miyouse_gid+"%2526post%255Fid%253D"+miyouse_post_id+"%2526size%253D"+miyouse_size, requestOptions)
+        .then(res => res.json())
+        .then(json_data => {
+          //循环遍历
+          let videoDatas = [];
+          for (var i = 0; i < json_data.data.list.length; i++) {
+            for (var j = 0; j < json_data.data.list[i].vod_list.length; j++) {
+              let idx = json_data.data.list[i].vod_list[j].resolutions.length-1;
+              let src = json_data.data.list[i].vod_list[j].resolutions[idx].url;
+              videoDatas.push({ src, index });
+              index += 1;
+            }
+          }
+          miyouse_gid += 1;
+          console.log(videoDatas);
+          return videoDatas;
+        }
+      ).catch(error => {
+        console.error("获取视频数据失败:", error);
+        return [];
+      });
     }
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -92,6 +128,12 @@
       const CHECK_INTERVAL = 1000;
       let isFetching = false;
 
+      if (window.location.href.includes('ys')) {
+        fetch_object = fetchVideo_miyouse;
+      } else {
+        fetch_object = fetchVideo;
+      }
+
       function startReplenishmentTask() {
         console.log("后台补货任务已启动...");
         setInterval(async () => {
@@ -102,17 +144,19 @@
           isFetching = true;
           try {
             console.log(`队列数量: ${videoUrlQueue.length}, 低于${MIN_QUEUE_SIZE}, 开始补货...`);
-            const videoData = await fetchVideo(fetchCounter);
-            
-            if (waitingResolvers.length > 0) {
-              const resolve = waitingResolvers.shift();
-              resolve(videoData);
-              console.log(`视频 (索引 ${videoData.index}) 直接提供给等待中的消费者`);
-            } else {
-              videoUrlQueue.push(videoData);
-              console.log(`视频 (索引 ${videoData.index}) 已入队. 当前队列长度: ${videoUrlQueue.length}`);
+            const videoDatas = await fetch_object(fetchCounter);
+
+            for (var i = 0; i < videoDatas.length; i++) {
+              if (waitingResolvers.length > 0) {
+                const resolve = waitingResolvers.shift();
+                resolve(videoDatas[i]);
+                console.log(`视频 (索引 ${videoDatas[i].index}) 直接提供给等待中的消费者`);
+              } else {
+                videoUrlQueue.push(videoDatas[i]);
+                console.log(`视频 (索引 ${videoDatas[i].index}) 已入队. 当前队列长度: ${videoUrlQueue.length}`);
+              }
+              fetchCounter++;
             }
-            fetchCounter++;
           } catch (error) {
             // 现在这里也能捕获到超时错误了
             console.error("补货任务失败(或超时):", error.message);
