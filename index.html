@@ -1,14 +1,225 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TikTok Style Video Feed</title>
-  <link href='/cute-girl.github.io/style.css' rel='stylesheet'>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>H5 视频播放器</title>
+  <link rel="stylesheet" href="https://unpkg.com/swiper/swiper-bundle.min.css">
+  <style>
+    /* CSS样式与之前版本相同，保持不变 */
+    html, body { position: relative; height: 100%; margin: 0; padding: 0; background-color: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; overflow: hidden; }
+    .swiper-container { width: 100%; height: 100%; }
+    .swiper-slide { display: flex; justify-content: center; align-items: center; background-color: #000; position: relative; }
+    .video-player { width: 100%; height: 100%; object-fit: contain; }
+    .loading-spinner { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; border: 4px solid rgba(255, 255, 255, 0.3); border-top-color: #fff; border-radius: 50%; animation: spin 1s linear infinite; z-index: 10; display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .swiper-slide.loading .loading-spinner { display: block; }
+    .play-icon { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(1.5); color: rgba(255, 255, 255, 0.8); font-size: 50px; opacity: 0; transition: opacity 0.3s, transform 0.3s; pointer-events: none; z-index: 20; }
+    .play-icon.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  </style>
 </head>
 <body>
-  <div class="video-container"></div>
 
-  <script defer type="text/javascript" src="/cute-girl.github.io/main.js"></script>
+  <div class="swiper-container">
+    <div class="swiper-wrapper"></div>
+  </div>
+
+  <script src="https://unpkg.com/swiper/swiper-bundle.min.js"></script>
+
+  <script>
+    // =======================
+    // === 【核心改动 1】 ======
+    // === 创建带超时的fetch函数 ===
+    // =======================
+    /**
+     * @param {string} url 请求的URL
+     * @param {object} options fetch的配置项
+     * @param {number} timeout 超时时间（毫秒）
+     * @returns {Promise<Response>}
+     */
+    function fetchWithTimeout(url, options = {}, timeout = 8000) {
+      const controller = new AbortController();
+      const signal = controller.signal;
+      
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          controller.abort();
+          reject(new Error('Request timed out'));
+        }, timeout);
+      });
+
+      const fetchPromise = fetch(url, { ...options, signal });
+
+      return Promise.race([fetchPromise, timeoutPromise]);
+    }
+
+    // =======================
+    // === 【核心改动 2】 ======
+    // ===  改造fetchVideo以使用超时机制 ===
+    // =======================
+    function fetchVideo(index) {
+      const requestOptions = {
+        method: 'GET',
+        headers: {
+          'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+          'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        },
+        mode: 'cors',
+        credentials: 'omit',
+      };
+      
+      // 使用带超时的fetch
+      return fetchWithTimeout('https://ilylty.fddfffff.site/https%3A%2F%2Ftucdn.wpon.cn%2Fapi-girl%2Findex.php', requestOptions)
+        .then(res => res.text())
+        .then(html => {
+          const match = html.match(/<video[^>]*src=["']([^"']+)["']/i);
+          let src = '';
+          if (match && match[1]) {
+            src = match[1].startsWith('http') ? match[1] : (match[1].startsWith('//') ? 'https:' + match[1] : match[1]);
+            src = src.replace('https://ilylty.fddfffff.site/', '');
+          }
+          if (!src) throw new Error('Video source not found in response');
+          return { src, index };
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      // 生产者-消费者模型，逻辑保持不变
+      const videoUrlQueue = [];
+      const waitingResolvers = [];
+      let fetchCounter = 0;
+      const MIN_QUEUE_SIZE = 10;
+      const CHECK_INTERVAL = 1000;
+      let isFetching = false;
+
+      function startReplenishmentTask() {
+        console.log("后台补货任务已启动...");
+        setInterval(async () => {
+          if (isFetching || videoUrlQueue.length >= MIN_QUEUE_SIZE) {
+            return;
+          }
+
+          isFetching = true;
+          try {
+            console.log(`队列数量: ${videoUrlQueue.length}, 低于${MIN_QUEUE_SIZE}, 开始补货...`);
+            const videoData = await fetchVideo(fetchCounter);
+            
+            if (waitingResolvers.length > 0) {
+              const resolve = waitingResolvers.shift();
+              resolve(videoData);
+              console.log(`视频 (索引 ${videoData.index}) 直接提供给等待中的消费者`);
+            } else {
+              videoUrlQueue.push(videoData);
+              console.log(`视频 (索引 ${videoData.index}) 已入队. 当前队列长度: ${videoUrlQueue.length}`);
+            }
+            fetchCounter++;
+          } catch (error) {
+            // 现在这里也能捕获到超时错误了
+            console.error("补货任务失败(或超时):", error.message);
+          } finally {
+            // 无论成功、失败还是超时，锁最终都会被释放！
+            isFetching = false;
+          }
+        }, CHECK_INTERVAL);
+      }
+
+      function getVideoFromQueue() {
+        return new Promise((resolve) => {
+          if (videoUrlQueue.length > 0) {
+            const videoData = videoUrlQueue.shift();
+            console.log(`消费者取货成功 (索引 ${videoData.index}). 队列剩余: ${videoUrlQueue.length}`);
+            resolve(videoData);
+          } else {
+            console.log(`队列为空，消费者进入等待状态...`);
+            waitingResolvers.push(resolve);
+          }
+        });
+      }
+
+      // Swiper 和播放器逻辑保持完全不变
+      let currentDataIndex = -1;
+      const swiper = new Swiper('.swiper-container', {
+        direction: 'vertical',
+        speed: 500,
+        on: {
+          slideChangeTransitionEnd: function () {
+            const activeSlide = this.slides[this.activeIndex];
+            if (!activeSlide) return;
+            const newIndex = parseInt(activeSlide.getAttribute('data-index'));
+
+            if (newIndex === currentDataIndex) return;
+            currentDataIndex = newIndex;
+            
+            console.log(`切换到视频索引: ${currentDataIndex}`);
+            playCurrentAndPauseOthers(currentDataIndex);
+            manageVideoSlides(currentDataIndex);
+          },
+        },
+      });
+      
+      async function manageVideoSlides(currentIndex) {
+        const validIndexes = [currentIndex - 1, currentIndex, currentIndex + 1];
+        const slidesToRemove = [];
+        swiper.slides.forEach((slide, domIndex) => {
+          const slideDataIndex = parseInt(slide.getAttribute('data-index'));
+          if (!validIndexes.includes(slideDataIndex)) { slidesToRemove.push(domIndex); }
+        });
+        if (slidesToRemove.length > 0) { swiper.removeSlide(slidesToRemove); }
+        await ensureSlideExists(currentIndex - 1);
+        await ensureSlideExists(currentIndex + 1);
+        const newDomIndex = swiper.slides.findIndex(slide => parseInt(slide.getAttribute('data-index')) === currentIndex);
+        if (newDomIndex !== -1 && newDomIndex !== swiper.activeIndex) { swiper.slideTo(newDomIndex, 0, false); }
+      }
+
+      async function ensureSlideExists(targetIndex) {
+        if (targetIndex < 0 || swiper.slides.some(slide => parseInt(slide.getAttribute('data-index')) === targetIndex)) { return; }
+        try {
+          const videoData = await getVideoFromQueue();
+          if (swiper.slides.some(slide => parseInt(slide.getAttribute('data-index')) === videoData.index)) { return; }
+          const newSlide = createSlide(videoData, videoData.index);
+          if (videoData.index > currentDataIndex) { swiper.appendSlide(newSlide); } 
+          else { swiper.prependSlide(newSlide); }
+          console.log(`已创建并添加了视频索引: ${videoData.index}`);
+        } catch (error) { console.error(`处理视频时失败:`, error); }
+      }
+
+      function createSlide(videoData, index) { /* ...与上一版完全相同... */
+        const slide = document.createElement('div'); slide.className = 'swiper-slide loading'; slide.setAttribute('data-index', index);
+        const loadingSpinner = document.createElement('div'); loadingSpinner.className = 'loading-spinner';
+        const playIcon = document.createElement('div'); playIcon.className = 'play-icon'; playIcon.innerHTML = '▶️';
+        const video = document.createElement('video'); video.className = 'video-player'; video.src = videoData.src; video.loop = false; video.playsInline = true; video.preload = 'auto';
+        video.oncanplay = () => slide.classList.remove('loading'); video.onplay = () => showPlayIcon(slide, false); video.onpause = () => showPlayIcon(slide, true); video.onended = () => swiper.slideNext();
+        slide.appendChild(video); slide.appendChild(loadingSpinner); slide.appendChild(playIcon);
+        addInteractionListeners(slide); return slide;
+      }
+      function addInteractionListeners(slide) { /* ...与上一版完全相同... */
+         const video = slide.querySelector('video'); let pressStartTime, longPressTimer;
+         slide.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse' && e.button !== 0) return; pressStartTime = Date.now(); longPressTimer = setTimeout(() => { video.playbackRate = 2.0; longPressTimer = null; }, 500); });
+         slide.addEventListener('pointerup', (e) => { if (e.pointerType === 'mouse' && e.button !== 0) return; if(video.playbackRate > 1.0) { video.playbackRate = 1.0; } else if (longPressTimer) { clearTimeout(longPressTimer); togglePlayPause(video); } pressStartTime = null; });
+      }
+      async function playVideo(video) { try { await video.play(); } catch(err) { console.warn("视频自动播放失败:", err.message); showPlayIcon(video.parentElement, true); } }
+      function togglePlayPause(video) { video.paused ? playVideo(video) : video.pause(); }
+      function showPlayIcon(slide, show) { const icon = slide.querySelector('.play-icon'); if(!icon) return; icon.classList.toggle('show', show); }
+      function playCurrentAndPauseOthers(currentIndex) { /* ...与上一版完全相同... */
+        document.querySelectorAll('.video-player').forEach(video => {
+          const slide = video.closest('.swiper-slide'); const dataIndex = parseInt(slide.getAttribute('data-index'));
+          if (dataIndex === currentIndex) { playVideo(video); } else { if (!video.paused) { video.pause(); video.currentTime = 0; } }
+        });
+      }
+      
+      async function init() {
+        console.log("初始化播放器...");
+        startReplenishmentTask();
+        const firstVideoData = await getVideoFromQueue();
+        const firstSlide = createSlide(firstVideoData, firstVideoData.index);
+        swiper.appendSlide(firstSlide);
+        currentDataIndex = firstVideoData.index;
+        playCurrentAndPauseOthers(currentDataIndex);
+        manageVideoSlides(currentDataIndex);
+      }
+      
+      init();
+    });
+  </script>
 </body>
 </html>
